@@ -10,12 +10,49 @@ from tkinter import ttk, filedialog, messagebox
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import mysql.connector
+from dotenv import load_dotenv
 
-os.environ['TCL_LIBRARY'] = r"C:\Users\twsho\AppData\Local\Programs\Python\Python313\tcl\tcl8.6"
-os.environ['TK_LIBRARY'] = r"C:\Users\twsho\AppData\Local\Programs\Python\Python313\tcl\tk8.6"
+load_dotenv()  # Load environment variables from a .env file if present
+
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "localhost"),
+    "user": os.getenv("DB_USER", "root"),
+    "password": os.getenv("DB_PASSWORD", ""),
+    "database": os.getenv("DB_NAME", "university_equity"),
+}
 
 
+def get_db_connection():
+    """Create and return a new MySQL database connection."""
+    return mysql.connector.connect(**DB_CONFIG)
 
+
+def load_main_dataframe():
+    """Load main dashboard data from MySQL into a pandas DataFrame.
+
+    Adjust the SQL query and aliases to match your schema/columns if needed.
+    """
+    query = """
+        SELECT
+            tc.name AS university_name,
+            tc.state AS state,
+            tc.type AS type,
+            tc.in_state_total AS funding_per_student,
+            NULL AS graduation_rate
+        FROM tuition_cost tc
+        LIMIT 5000;
+    """
+
+    conn = get_db_connection()
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
+# Comment out to run since this is needed for Travis to run
+# os.environ['TCL_LIBRARY'] = r"C:\Users\twsho\AppData\Local\Programs\Python\Python313\tcl\tcl8.6"
+# os.environ['TK_LIBRARY'] = r"C:\Users\twsho\AppData\Local\Programs\Python\Python313\tcl\tk8.6"
+# ...
 class EducationDashboard(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -32,15 +69,10 @@ class EducationDashboard(tk.Tk):
     # ---------- Header ----------
     def create_header(self):
         header = tk.Label(
-            self,
-            text="🎓 University Resources & Outcomes Dashboard",
-            font=("Segoe UI", 18, "bold"),
-            bg="#2C3E50",
-            fg="white",
-            padx=20,
-            pady=10
+            self, text="University Resources & Outcomes Dashboard",
+            font=("Segoe UI", 18, "bold"), bg="#2C3E50", fg="white", pady=10
         )
-        header.pack(fill="x")
+        header.pack(side="top", fill="x")
 
     # ---------- Sidebar ----------
     def create_sidebar(self):
@@ -50,6 +82,10 @@ class EducationDashboard(tk.Tk):
         # Load CSV Button
         load_btn = ttk.Button(sidebar, text="Load CSV Dataset", command=self.load_csv)
         load_btn.pack(padx=10, pady=10, fill="x")
+
+        # Load from MySQL Database button
+        load_db_btn = ttk.Button(sidebar, text="Load from Database", command=self.load_data_from_db)
+        load_db_btn.pack(padx=10, pady=5, fill="x")
 
         ttk.Label(sidebar, text="Filter by State:").pack(padx=10, anchor="w")
         self.state_var = tk.StringVar()
@@ -62,7 +98,7 @@ class EducationDashboard(tk.Tk):
         self.type_combo.pack(padx=10, pady=5, fill="x")
 
         ttk.Label(sidebar, text="Chart Metric:").pack(padx=10, anchor="w")
-        self.metric_var = tk.StringVar(value="graduation_rate")
+        self.metric_var = tk.StringVar(value="funding_per_student")
         self.metric_combo = ttk.Combobox(
             sidebar, textvariable=self.metric_var,
             values=["funding_per_student", "graduation_rate"], state="readonly"
@@ -100,6 +136,34 @@ class EducationDashboard(tk.Tk):
         self.table.pack(fill="both", expand=True, padx=10, pady=5)
 
     # ---------- Logic ----------
+    def load_data_from_db(self):
+        """Load data for the dashboard directly from the MySQL database."""
+        try:
+            df = load_main_dataframe()
+            if df.empty:
+                messagebox.showwarning("No Data", "Database query returned no rows.")
+                return
+
+            self.df = df
+            self.df.columns = [c.strip() for c in self.df.columns]
+
+            # Populate filters from DB data
+            if "state" in self.df.columns:
+                states = sorted(self.df["state"].dropna().unique().tolist())
+                self.state_combo["values"] = ["(All)"] + states
+                self.state_combo.current(0)
+
+            if "type" in self.df.columns:
+                types = sorted(self.df["type"].dropna().unique().tolist())
+                self.type_combo["values"] = ["(All)"] + types
+                self.type_combo.current(0)
+
+            messagebox.showinfo("Data Loaded", f"Loaded {len(self.df)} rows from database.")
+            self.update_summary()
+            self.update_charts()
+        except Exception as e:
+            messagebox.showerror("Database Error", f"Could not load data from MySQL:\n{e}")
+
     def load_csv(self):
         file_path = filedialog.askopenfilename(
             title="Select dataset CSV",
